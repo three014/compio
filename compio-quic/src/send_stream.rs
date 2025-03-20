@@ -443,7 +443,7 @@ pub(crate) mod h3_impl {
         }
 
         fn send_id(&self) -> quic::StreamId {
-            self.inner.stream.0.try_into().unwrap()
+            u64::from(self.inner.stream).try_into().unwrap()
         }
     }
 
