@@ -73,7 +73,7 @@ impl SendStream {
                 state.wake();
                 Ok(())
             }
-            Err(FinishError::ClosedStream) => Err(ClosedStream::new()),
+            Err(FinishError::ClosedStream) => Err(ClosedStream::default()),
             // Harmless. If the application needs to know about stopped streams at this point,
             // it should call `stopped`.
             Err(FinishError::Stopped(_)) => Ok(()),
