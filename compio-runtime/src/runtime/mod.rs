@@ -6,6 +6,7 @@ use std::{
     io,
     marker::PhantomData,
     panic::AssertUnwindSafe,
+    pin::Pin,
     rc::Rc,
     sync::Arc,
     task::{Context, Poll},
@@ -26,6 +27,7 @@ pub(crate) mod op;
 pub(crate) mod time;
 
 mod send_wrapper;
+use pin_project_lite::pin_project;
 use send_wrapper::SendWrapper;
 
 #[cfg(feature = "time")]
@@ -472,14 +474,70 @@ pub fn spawn_blocking<T: Send + 'static>(
     Runtime::with_current(|r| r.spawn_blocking(f))
 }
 
+pin_project! {
+    #[project = SubmitWithFlagsStateProj]
+    enum SubmitWithFlagsState<T: OpCode> {
+        SubmitOp { op: Option<T> },
+        Waiting { fut: OpFuture<T> },
+    }
+}
+
+pin_project! {
+    pub struct SubmitWithFlags<T: OpCode> {
+        #[pin]
+        state: SubmitWithFlagsState<T>,
+    }
+}
+
+impl<T: OpCode + 'static> Future for SubmitWithFlags<T> {
+    type Output = (BufResult<usize, T>, u32);
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        match this.state.as_mut().project() {
+            SubmitWithFlagsStateProj::SubmitOp { op } => {
+                match Runtime::with_current(|r| r.submit_raw(op.take().unwrap())) {
+                    PushEntry::Pending(key) => {
+                        let mut fut = OpFuture::new(key);
+                        let result = Pin::new(&mut fut).poll(cx);
+                        this.state.set(SubmitWithFlagsState::Waiting { fut });
+                        result
+                    }
+                    // submit_flags won't be ready immediately, if ready, it must be error without
+                    // flags, or the flags are not necessary
+                    PushEntry::Ready(res) => return Poll::Ready((res, 0)),
+                }
+            }
+            SubmitWithFlagsStateProj::Waiting { fut } => Pin::new(fut).poll(cx),
+        }
+    }
+}
+
+pin_project! {
+    pub struct Submit<T: OpCode> {
+        #[pin]
+        with_flags: SubmitWithFlags<T>,
+    }
+}
+
+impl<T: OpCode + 'static> Future for Submit<T> {
+    type Output = BufResult<usize, T>;
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.project().with_flags.poll(cx).map(|(res, _flags)| res)
+    }
+}
+
 /// Submit an operation to the current runtime, and return a future for it.
 ///
 /// ## Panics
 ///
 /// This method doesn't create runtime. It tries to obtain the current runtime
 /// by [`Runtime::with_current`].
-pub async fn submit<T: OpCode + 'static>(op: T) -> BufResult<usize, T> {
-    submit_with_flags(op).await.0
+pub fn submit<T: OpCode + 'static>(op: T) -> Submit<T> {
+    Submit {
+        with_flags: submit_with_flags(op),
+    }
 }
 
 /// Submit an operation to the current runtime, and return a future for it with
@@ -489,15 +547,9 @@ pub async fn submit<T: OpCode + 'static>(op: T) -> BufResult<usize, T> {
 ///
 /// This method doesn't create runtime. It tries to obtain the current runtime
 /// by [`Runtime::with_current`].
-pub async fn submit_with_flags<T: OpCode + 'static>(op: T) -> (BufResult<usize, T>, u32) {
-    let state = Runtime::with_current(|r| r.submit_raw(op));
-    match state {
-        PushEntry::Pending(user_data) => OpFuture::new(user_data).await,
-        PushEntry::Ready(res) => {
-            // submit_flags won't be ready immediately, if ready, it must be error without
-            // flags, or the flags are not necessary
-            (res, 0)
-        }
+pub fn submit_with_flags<T: OpCode + 'static>(op: T) -> SubmitWithFlags<T> {
+    SubmitWithFlags {
+        state: SubmitWithFlagsState::SubmitOp { op: Some(op) },
     }
 }
 

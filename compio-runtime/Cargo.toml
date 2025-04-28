@@ -42,6 +42,7 @@ once_cell = { workspace = true }
 scoped-tls = "1.0.1"
 slab = { workspace = true, optional = true }
 socket2 = { workspace = true }
+pin-project-lite = "0.2.16"
 
 # Windows specific dependencies
 [target.'cfg(windows)'.dependencies]
