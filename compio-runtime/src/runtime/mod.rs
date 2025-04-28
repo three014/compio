@@ -483,6 +483,7 @@ pin_project! {
 }
 
 pin_project! {
+    /// A future returned from a call to [`submit_with_flags`].
     pub struct SubmitWithFlags<T: OpCode> {
         #[pin]
         state: SubmitWithFlagsState<T>,
@@ -514,6 +515,7 @@ impl<T: OpCode + 'static> Future for SubmitWithFlags<T> {
 }
 
 pin_project! {
+    /// A future returned from a call to [`submit`].
     pub struct Submit<T: OpCode> {
         #[pin]
         with_flags: SubmitWithFlags<T>,
